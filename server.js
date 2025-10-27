@@ -3,6 +3,8 @@ import cors from 'cors';
 import multer from 'multer';
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { initializeApp, getApps } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 
 // Load environment variables
 dotenv.config();
@@ -38,6 +40,22 @@ const upload = multer({
     }
   }
 });
+
+// Initialize Firebase Admin
+let db;
+console.log('=== Initializing Firebase Admin ===');
+try {
+  if (!getApps().length) {
+    initializeApp({
+      projectId: process.env.FIREBASE_PROJECT_ID || 'clean-sort',
+    });
+  }
+  db = getFirestore();
+  console.log('✅ Firebase Admin initialized successfully');
+} catch (error) {
+  console.error('❌ Failed to initialize Firebase Admin:', error.message);
+  console.log('⚠️  Will use mock data storage');
+}
 
 // Initialize Gemini AI
 let genAI;
@@ -93,61 +111,179 @@ let mockReminders = [];
 let mockSettings = { city: '', onboarding: false };
 
 // Items API endpoints
-app.get('/api/items', (req, res) => {
-  console.log('GET /api/items - Returning', mockItems.length, 'items');
-  res.json({ success: true, data: mockItems });
+app.get('/api/items', async (req, res) => {
+  try {
+    if (db) {
+      // Use Firebase Firestore
+      const itemsSnapshot = await db.collection('items').get();
+      const items = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log('GET /api/items - Returning', items.length, 'items from Firestore');
+      res.json({ success: true, data: items });
+    } else {
+      // Fallback to mock data
+      console.log('GET /api/items - Returning', mockItems.length, 'items from mock data');
+      res.json({ success: true, data: mockItems });
+    }
+  } catch (error) {
+    console.error('Error getting items:', error);
+    res.status(500).json({ error: 'Failed to get items' });
+  }
 });
 
-app.post('/api/items', (req, res) => {
-  const item = {
-    ...req.body,
-    id: Date.now().toString(36) + Math.random().toString(36).substr(2),
-    createdAt: new Date().toISOString()
-  };
-  mockItems.push(item);
-  console.log('POST /api/items - Added item:', item.id);
-  res.json({ success: true, data: { item } });
+app.post('/api/items', async (req, res) => {
+  try {
+    const itemData = {
+      ...req.body,
+      createdAt: new Date().toISOString()
+    };
+    
+    if (db) {
+      // Use Firebase Firestore
+      const docRef = await db.collection('items').add(itemData);
+      const item = { id: docRef.id, ...itemData };
+      console.log('POST /api/items - Added item to Firestore:', docRef.id);
+      res.json({ success: true, data: { item } });
+    } else {
+      // Fallback to mock data
+      const item = {
+        ...itemData,
+        id: Date.now().toString(36) + Math.random().toString(36).substr(2)
+      };
+      mockItems.push(item);
+      console.log('POST /api/items - Added item to mock data:', item.id);
+      res.json({ success: true, data: { item } });
+    }
+  } catch (error) {
+    console.error('Error saving item:', error);
+    res.status(500).json({ error: 'Failed to save item' });
+  }
 });
 
-app.delete('/api/items/:id', (req, res) => {
-  const itemId = req.params.id;
-  const index = mockItems.findIndex(item => item.id === itemId);
-  if (index !== -1) {
-    mockItems.splice(index, 1);
-    console.log('DELETE /api/items - Removed item:', itemId);
-    res.json({ success: true });
-  } else {
-    res.status(404).json({ error: 'Item not found' });
+app.delete('/api/items/:id', async (req, res) => {
+  try {
+    const itemId = req.params.id;
+    
+    if (db) {
+      // Use Firebase Firestore
+      await db.collection('items').doc(itemId).delete();
+      console.log('DELETE /api/items - Removed item from Firestore:', itemId);
+      res.json({ success: true });
+    } else {
+      // Fallback to mock data
+      const index = mockItems.findIndex(item => item.id === itemId);
+      if (index !== -1) {
+        mockItems.splice(index, 1);
+        console.log('DELETE /api/items - Removed item from mock data:', itemId);
+        res.json({ success: true });
+      } else {
+        res.status(404).json({ error: 'Item not found' });
+      }
+    }
+  } catch (error) {
+    console.error('Error deleting item:', error);
+    res.status(500).json({ error: 'Failed to delete item' });
   }
 });
 
 // Reminders API endpoints
-app.get('/api/reminders', (req, res) => {
-  console.log('GET /api/reminders - Returning', mockReminders.length, 'reminders');
-  res.json({ success: true, data: mockReminders });
+app.get('/api/reminders', async (req, res) => {
+  try {
+    if (db) {
+      // Use Firebase Firestore
+      const remindersSnapshot = await db.collection('reminders').get();
+      const reminders = remindersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log('GET /api/reminders - Returning', reminders.length, 'reminders from Firestore');
+      res.json({ success: true, data: reminders });
+    } else {
+      // Fallback to mock data
+      console.log('GET /api/reminders - Returning', mockReminders.length, 'reminders from mock data');
+      res.json({ success: true, data: mockReminders });
+    }
+  } catch (error) {
+    console.error('Error getting reminders:', error);
+    res.status(500).json({ error: 'Failed to get reminders' });
+  }
 });
 
 // Settings API endpoints
-app.get('/api/settings/city', (req, res) => {
-  console.log('GET /api/settings/city - Returning city:', mockSettings.city);
-  res.json({ success: true, data: mockSettings.city });
+app.get('/api/settings/city', async (req, res) => {
+  try {
+    if (db) {
+      // Use Firebase Firestore
+      const settingsDoc = await db.collection('settings').doc('user').get();
+      const city = settingsDoc.exists ? settingsDoc.data().city || '' : '';
+      console.log('GET /api/settings/city - Returning city from Firestore:', city);
+      res.json({ success: true, data: city });
+    } else {
+      // Fallback to mock data
+      console.log('GET /api/settings/city - Returning city from mock data:', mockSettings.city);
+      res.json({ success: true, data: mockSettings.city });
+    }
+  } catch (error) {
+    console.error('Error getting city:', error);
+    res.status(500).json({ error: 'Failed to get city' });
+  }
 });
 
-app.put('/api/settings/city', (req, res) => {
-  mockSettings.city = req.body.city || '';
-  console.log('PUT /api/settings/city - Set city to:', mockSettings.city);
-  res.json({ success: true, data: { city: mockSettings.city } });
+app.put('/api/settings/city', async (req, res) => {
+  try {
+    const city = req.body.city || '';
+    
+    if (db) {
+      // Use Firebase Firestore
+      await db.collection('settings').doc('user').set({ city }, { merge: true });
+      console.log('PUT /api/settings/city - Set city in Firestore:', city);
+      res.json({ success: true, data: { city } });
+    } else {
+      // Fallback to mock data
+      mockSettings.city = city;
+      console.log('PUT /api/settings/city - Set city in mock data:', city);
+      res.json({ success: true, data: { city } });
+    }
+  } catch (error) {
+    console.error('Error setting city:', error);
+    res.status(500).json({ error: 'Failed to set city' });
+  }
 });
 
-app.get('/api/settings/onboarding', (req, res) => {
-  console.log('GET /api/settings/onboarding - Returning:', mockSettings.onboarding);
-  res.json({ success: true, data: mockSettings.onboarding });
+app.get('/api/settings/onboarding', async (req, res) => {
+  try {
+    if (db) {
+      // Use Firebase Firestore
+      const settingsDoc = await db.collection('settings').doc('user').get();
+      const onboarding = settingsDoc.exists ? settingsDoc.data().onboarding || false : false;
+      console.log('GET /api/settings/onboarding - Returning from Firestore:', onboarding);
+      res.json({ success: true, data: onboarding });
+    } else {
+      // Fallback to mock data
+      console.log('GET /api/settings/onboarding - Returning from mock data:', mockSettings.onboarding);
+      res.json({ success: true, data: mockSettings.onboarding });
+    }
+  } catch (error) {
+    console.error('Error getting onboarding status:', error);
+    res.status(500).json({ error: 'Failed to get onboarding status' });
+  }
 });
 
-app.put('/api/settings/onboarding', (req, res) => {
-  mockSettings.onboarding = req.body.completed || false;
-  console.log('PUT /api/settings/onboarding - Set to:', mockSettings.onboarding);
-  res.json({ success: true, data: { onboarding: mockSettings.onboarding } });
+app.put('/api/settings/onboarding', async (req, res) => {
+  try {
+    const onboarding = req.body.completed || false;
+    
+    if (db) {
+      // Use Firebase Firestore
+      await db.collection('settings').doc('user').set({ onboarding }, { merge: true });
+      console.log('PUT /api/settings/onboarding - Set in Firestore:', onboarding);
+      res.json({ success: true, data: { onboarding } });
+    } else {
+      // Fallback to mock data
+      mockSettings.onboarding = onboarding;
+      console.log('PUT /api/settings/onboarding - Set in mock data:', onboarding);
+      res.json({ success: true, data: { onboarding } });
+    }
+  } catch (error) {
+    console.error('Error setting onboarding status:', error);
+    res.status(500).json({ error: 'Failed to set onboarding status' });
+  }
 });
 
 // Main OCR processing endpoint - NO AUTH for simplicity
