@@ -5,8 +5,19 @@ import { verifyToken, validateRequest } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// Check if Firebase is available
+const checkFirebase = (req, res, next) => {
+  if (!db) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database service unavailable. Please check server configuration.'
+    });
+  }
+  next();
+};
+
 // GET /api/settings - Get all user settings
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', verifyToken, checkFirebase, async (req, res) => {
   try {
     const userId = req.user.uid;
     
@@ -41,7 +52,7 @@ router.get('/', verifyToken, async (req, res) => {
 });
 
 // PUT /api/settings - Update settings
-router.put('/', verifyToken, [
+router.put('/', verifyToken, checkFirebase, [
   body('notifications').optional().isBoolean().withMessage('Notifications must be boolean'),
   body('locationServices').optional().isBoolean().withMessage('Location services must be boolean'),
   body('autoSync').optional().isBoolean().withMessage('Auto sync must be boolean'),
@@ -79,7 +90,7 @@ router.put('/', verifyToken, [
 });
 
 // GET /api/settings/city - Get selected city
-router.get('/city', verifyToken, async (req, res) => {
+router.get('/city', verifyToken, checkFirebase, async (req, res) => {
   try {
     const userId = req.user.uid;
     
@@ -108,7 +119,7 @@ router.get('/city', verifyToken, async (req, res) => {
 });
 
 // PUT /api/settings/city - Update selected city
-router.put('/city', verifyToken, [
+router.put('/city', verifyToken, checkFirebase, [
   body('city').trim().isLength({ min: 1, max: 100 }).withMessage('City must be 1-100 characters')
 ], validateRequest, async (req, res) => {
   try {
@@ -143,7 +154,7 @@ router.put('/city', verifyToken, [
 });
 
 // GET /api/settings/onboarding - Get onboarding status
-router.get('/onboarding', verifyToken, async (req, res) => {
+router.get('/onboarding', verifyToken, checkFirebase, async (req, res) => {
   try {
     const userId = req.user.uid;
     
@@ -172,7 +183,7 @@ router.get('/onboarding', verifyToken, async (req, res) => {
 });
 
 // PUT /api/settings/onboarding - Set onboarding completed
-router.put('/onboarding', verifyToken, [
+router.put('/onboarding', verifyToken, checkFirebase, [
   body('completed').isBoolean().withMessage('Completed must be boolean')
 ], validateRequest, async (req, res) => {
   try {
@@ -207,7 +218,7 @@ router.put('/onboarding', verifyToken, [
 });
 
 // GET /api/export - Export all user data
-router.get('/export', verifyToken, async (req, res) => {
+router.get('/export', verifyToken, checkFirebase, async (req, res) => {
   try {
     const userId = req.user.uid;
     

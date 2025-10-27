@@ -18,7 +18,7 @@ import settingsRouter from './routes/settings.js';
 import { verifyToken } from './middleware/auth.js';
 
 const app = express();
-const PORT = process.env.PORT || 0;
+const PORT = process.env.PORT || 3001;
 
 // CORS configuration
 const corsOptions = {

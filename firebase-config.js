@@ -42,18 +42,21 @@ try {
   console.log('1. FIREBASE_SERVICE_ACCOUNT_KEY environment variable set');
   console.log('2. firebase-service-account.json file in the server directory');
   console.log('3. FIREBASE_STORAGE_BUCKET environment variable set');
-  process.exit(1);
+  console.log('⚠️  Server will continue without Firebase (some features may not work)');
+  // Don't exit - let the server continue without Firebase
 }
 
-// Export Firebase services
-export const db = admin.firestore();
-export const storage = admin.storage();
-export const auth = admin.auth();
+// Export Firebase services (only if initialized)
+export const db = firebaseApp ? admin.firestore() : null;
+export const storage = firebaseApp ? admin.storage() : null;
+export const auth = firebaseApp ? admin.auth() : null;
 
-// Firestore settings
-db.settings({
-  ignoreUndefinedProperties: true,
-});
+// Firestore settings (only if db is available)
+if (db) {
+  db.settings({
+    ignoreUndefinedProperties: true,
+  });
+}
 
 // Helper function to get user collection path
 export const getUserCollectionPath = (userId, collection) => {

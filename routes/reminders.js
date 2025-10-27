@@ -5,8 +5,19 @@ import { verifyToken, validateRequest } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// Check if Firebase is available
+const checkFirebase = (req, res, next) => {
+  if (!db) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database service unavailable. Please check server configuration.'
+    });
+  }
+  next();
+};
+
 // GET /api/reminders - Get all user reminders
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', verifyToken, checkFirebase, async (req, res) => {
   try {
     const userId = req.user.uid;
     
@@ -31,7 +42,7 @@ router.get('/', verifyToken, async (req, res) => {
 });
 
 // PUT /api/reminders/:id - Update reminder
-router.put('/:id', verifyToken, [
+router.put('/:id', verifyToken, checkFirebase, [
   param('id').isString().notEmpty().withMessage('Reminder ID is required'),
   body('status').optional().isIn(['upcoming', 'overdue', 'completed']).withMessage('Invalid status'),
   body('dueDate').optional().isISO8601().withMessage('Invalid date format')
@@ -85,7 +96,7 @@ router.put('/:id', verifyToken, [
 });
 
 // DELETE /api/reminders/item/:itemId - Delete reminders by itemId
-router.delete('/item/:itemId', verifyToken, [
+router.delete('/item/:itemId', verifyToken, checkFirebase, [
   param('itemId').isString().notEmpty().withMessage('Item ID is required')
 ], validateRequest, async (req, res) => {
   try {
@@ -126,7 +137,7 @@ router.delete('/item/:itemId', verifyToken, [
 });
 
 // POST /api/reminders/bulk-update - Bulk update reminders
-router.post('/bulk-update', verifyToken, [
+router.post('/bulk-update', verifyToken, checkFirebase, [
   body('reminderIds').isArray({ min: 1 }).withMessage('Reminder IDs must be a non-empty array'),
   body('updates').isObject().withMessage('Updates must be an object'),
   body('updates.status').optional().isIn(['upcoming', 'overdue', 'completed']).withMessage('Invalid status'),

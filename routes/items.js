@@ -5,6 +5,17 @@ import { verifyToken, validateRequest } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// Check if Firebase is available
+const checkFirebase = (req, res, next) => {
+  if (!db) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database service unavailable. Please check server configuration.'
+    });
+  }
+  next();
+};
+
 // Validation rules
 const itemValidation = [
   body('name').trim().isLength({ min: 2, max: 100 }).withMessage('Name must be 2-100 characters'),
@@ -44,7 +55,7 @@ const createReminder = async (userId, item) => {
 };
 
 // POST /api/items - Create single item
-router.post('/', verifyToken, itemValidation, validateRequest, async (req, res) => {
+router.post('/', verifyToken, checkFirebase, itemValidation, validateRequest, async (req, res) => {
   try {
     const userId = req.user.uid;
     const { name, category, quantity, unit, interval } = req.body;
@@ -85,7 +96,7 @@ router.post('/', verifyToken, itemValidation, validateRequest, async (req, res) 
 });
 
 // POST /api/items/bulk - Create multiple items
-router.post('/bulk', verifyToken, bulkItemValidation, validateRequest, async (req, res) => {
+router.post('/bulk', verifyToken, checkFirebase, bulkItemValidation, validateRequest, async (req, res) => {
   try {
     const userId = req.user.uid;
     const { items } = req.body;
@@ -160,7 +171,7 @@ router.post('/bulk', verifyToken, bulkItemValidation, validateRequest, async (re
 });
 
 // GET /api/items - Get all user items
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', verifyToken, checkFirebase, async (req, res) => {
   try {
     const userId = req.user.uid;
     
@@ -185,7 +196,7 @@ router.get('/', verifyToken, async (req, res) => {
 });
 
 // PUT /api/items/:id - Update item
-router.put('/:id', verifyToken, [
+router.put('/:id', verifyToken, checkFirebase, [
   param('id').isString().notEmpty().withMessage('Item ID is required'),
   body('name').optional().trim().isLength({ min: 2, max: 100 }).withMessage('Name must be 2-100 characters'),
   body('category').optional().isIn(['dry', 'wet', 'medical', 'hazardous', 'recyclable', 'e-waste']).withMessage('Invalid category'),
@@ -262,7 +273,7 @@ router.put('/:id', verifyToken, [
 });
 
 // DELETE /api/items/:id - Delete item and associated reminders
-router.delete('/:id', verifyToken, [
+router.delete('/:id', verifyToken, checkFirebase, [
   param('id').isString().notEmpty().withMessage('Item ID is required')
 ], validateRequest, async (req, res) => {
   try {
