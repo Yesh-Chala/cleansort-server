@@ -149,8 +149,25 @@ app.post('/api/items', async (req, res) => {
       // Use Firebase Firestore
       const docRef = await db.collection('items').add(itemData);
       const item = { id: docRef.id, ...itemData };
-      console.log('POST /api/items - Added item to Firestore:', docRef.id);
-      res.json({ success: true, data: { item } });
+      
+      // Create automatic reminder for the item
+      const disposalDate = new Date();
+      disposalDate.setDate(disposalDate.getDate() + itemData.interval);
+      
+      const reminderData = {
+        itemId: docRef.id,
+        itemName: itemData.name,
+        category: itemData.category,
+        dueDate: disposalDate.toISOString(),
+        status: "upcoming",
+        createdAt: new Date().toISOString()
+      };
+      
+      const reminderRef = await db.collection('reminders').add(reminderData);
+      const reminder = { id: reminderRef.id, ...reminderData };
+      
+      console.log('POST /api/items - Added item and reminder to Firestore:', docRef.id, reminderRef.id);
+      res.json({ success: true, data: { item, reminder } });
     } else {
       // Fallback to mock data
       const item = {
@@ -158,8 +175,24 @@ app.post('/api/items', async (req, res) => {
         id: Date.now().toString(36) + Math.random().toString(36).substr(2)
       };
       mockItems.push(item);
-      console.log('POST /api/items - Added item to mock data:', item.id);
-      res.json({ success: true, data: { item } });
+      
+      // Create mock reminder
+      const disposalDate = new Date();
+      disposalDate.setDate(disposalDate.getDate() + itemData.interval);
+      
+      const reminder = {
+        id: Date.now().toString(36) + Math.random().toString(36).substr(2),
+        itemId: item.id,
+        itemName: itemData.name,
+        category: itemData.category,
+        dueDate: disposalDate.toISOString(),
+        status: "upcoming",
+        createdAt: new Date().toISOString()
+      };
+      mockReminders.push(reminder);
+      
+      console.log('POST /api/items - Added item and reminder to mock data:', item.id, reminder.id);
+      res.json({ success: true, data: { item, reminder } });
     }
   } catch (error) {
     console.error('Error saving item:', error);
@@ -174,14 +207,32 @@ app.delete('/api/items/:id', async (req, res) => {
     if (db) {
       // Use Firebase Firestore
       await db.collection('items').doc(itemId).delete();
-      console.log('DELETE /api/items - Removed item from Firestore:', itemId);
+      
+      // Also delete associated reminders
+      const remindersSnapshot = await db.collection('reminders')
+        .where('itemId', '==', itemId)
+        .get();
+      
+      const deletePromises = remindersSnapshot.docs.map(doc => doc.ref.delete());
+      await Promise.all(deletePromises);
+      
+      console.log('DELETE /api/items - Removed item and', remindersSnapshot.size, 'reminders from Firestore:', itemId);
       res.json({ success: true });
     } else {
       // Fallback to mock data
       const index = mockItems.findIndex(item => item.id === itemId);
       if (index !== -1) {
         mockItems.splice(index, 1);
-        console.log('DELETE /api/items - Removed item from mock data:', itemId);
+        
+        // Remove associated reminders
+        const reminderIndices = mockReminders
+          .map((reminder, idx) => reminder.itemId === itemId ? idx : -1)
+          .filter(idx => idx !== -1)
+          .reverse(); // Delete from end to avoid index shifting
+        
+        reminderIndices.forEach(idx => mockReminders.splice(idx, 1));
+        
+        console.log('DELETE /api/items - Removed item and', reminderIndices.length, 'reminders from mock data:', itemId);
         res.json({ success: true });
       } else {
         res.status(404).json({ error: 'Item not found' });
