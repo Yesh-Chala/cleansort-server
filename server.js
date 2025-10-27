@@ -7,8 +7,15 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import fs from 'fs';
 import path from 'path';
 
-// Load environment variables
+// Load environment variables FIRST
 dotenv.config();
+
+// Import Firebase configuration and routes
+import './firebase-config.js';
+import itemsRouter from './routes/items.js';
+import remindersRouter from './routes/reminders.js';
+import settingsRouter from './routes/settings.js';
+import { verifyToken } from './middleware/auth.js';
 
 const app = express();
 const PORT = process.env.PORT || 0;
@@ -41,9 +48,9 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Configure multer for file uploads
-const storage = multer.memoryStorage();
+const multerStorage = multer.memoryStorage();
 const upload = multer({ 
-  storage: storage,
+  storage: multerStorage,
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB limit
   },
@@ -84,8 +91,13 @@ app.get('/health', (req, res) => {
   });
 });
 
+// API Routes
+app.use('/api/items', itemsRouter);
+app.use('/api/reminders', remindersRouter);
+app.use('/api/settings', settingsRouter);
+
 // Main OCR processing endpoint
-app.post('/api/process-receipt', upload.single('image'), async (req, res) => {
+app.post('/api/process-receipt', verifyToken, upload.single('image'), async (req, res) => {
   try {
     console.log('=== OCR SERVER: Processing receipt ===');
     
@@ -93,6 +105,7 @@ app.post('/api/process-receipt', upload.single('image'), async (req, res) => {
     if (!process.env.GEMINI_API_KEY) {
       console.error('GEMINI_API_KEY not found in environment variables');
       return res.status(500).json({
+        success: false,
         error: 'Server configuration error: GEMINI_API_KEY not found'
       });
     }
@@ -100,13 +113,19 @@ app.post('/api/process-receipt', upload.single('image'), async (req, res) => {
     // Validate request
     if (!req.file) {
       return res.status(400).json({
+        success: false,
         error: 'No image file provided'
       });
     }
 
+    const userId = req.user.uid;
     const { city } = req.body;
+    console.log('User ID:', userId);
     console.log('Received city:', city);
     console.log('Image file:', req.file.originalname, req.file.size, 'bytes');
+
+    // Skip image storage - just process for OCR
+    console.log('Processing image for OCR (not storing)');
 
     // Get city-specific prompt
     const cityPromptSuffix = getCityPromptSuffix(city);
@@ -188,7 +207,7 @@ Example: [{"name":"Milk","quantity":"1L","category":"recyclable","disposalInterv
     console.log('Final parsed items array:', parsedItems);
     console.log('Total items to return:', parsedItems.length);
 
-    // Return the parsed items
+    // Return the parsed items (frontend will save them via API)
     res.json({
       success: true,
       items: parsedItems,
@@ -273,11 +292,19 @@ const server = app.listen(PORT, () => {
   console.log(`🚀 CleanSort OCR Server running on port ${actualPort}`);
   console.log(`📡 Health check: http://localhost:${actualPort}/health`);
   console.log(`🔍 OCR endpoint: http://localhost:${actualPort}/api/process-receipt`);
+  console.log(`📦 Items API: http://localhost:${actualPort}/api/items`);
+  console.log(`⏰ Reminders API: http://localhost:${actualPort}/api/reminders`);
+  console.log(`⚙️  Settings API: http://localhost:${actualPort}/api/settings`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   
   if (!process.env.GEMINI_API_KEY) {
     console.warn('⚠️  WARNING: GEMINI_API_KEY not found in environment variables');
     console.warn('   Please create a .env file with your Gemini API key');
+  }
+  
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT_KEY && !process.env.FIREBASE_STORAGE_BUCKET) {
+    console.warn('⚠️  WARNING: Firebase configuration not found');
+    console.warn('   Please set FIREBASE_SERVICE_ACCOUNT_KEY and FIREBASE_STORAGE_BUCKET environment variables');
   }
 });
 
