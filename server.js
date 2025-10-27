@@ -1,49 +1,24 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import fs from 'fs';
-import path from 'path';
 
-// Load environment variables FIRST
+// Load environment variables
 dotenv.config();
-
-// Import Firebase configuration and routes
-import './firebase-config.js';
-import itemsRouter from './routes/items.js';
-import remindersRouter from './routes/reminders.js';
-import settingsRouter from './routes/settings.js';
-import { verifyToken } from './middleware/auth.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CORS configuration
-const corsOptions = {
-  origin: function (origin, callback) {
-    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [
-      'http://localhost:5173',
-      'http://localhost:3000',
-      'http://127.0.0.1:5173',
-      'http://127.0.0.1:3000'
-    ];
-    
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      console.log('CORS blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true
-};
+// Logging middleware - log all requests
+app.use((req, res, next) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] ${req.method} ${req.path} - Origin: ${req.headers.origin || 'none'}`);
+  next();
+});
 
-app.use(cors(corsOptions));
+// CORS configuration - allow all origins for Railway deployment
+app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -64,101 +39,106 @@ const upload = multer({
 });
 
 // Initialize Gemini AI
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+let genAI;
+console.log('=== Initializing Gemini AI ===');
+console.log('Environment check:');
+console.log('- PORT:', process.env.PORT || '3001 (default)');
+console.log('- NODE_ENV:', process.env.NODE_ENV || 'development');
+console.log('- GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? '✅ Set (hidden)' : '❌ Not set');
 
-// City-specific prompts (copied from frontend)
+try {
+  if (!process.env.GEMINI_API_KEY) {
+    console.warn('⚠️  WARNING: GEMINI_API_KEY not configured - will use mock data');
+  } else {
+    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    console.log('✅ Gemini AI initialized successfully');
+  }
+} catch (error) {
+  console.error('❌ Failed to initialize Gemini AI:', error.message);
+  console.error('Stack:', error.stack);
+}
+
+// City-specific prompts
 const getCityPromptSuffix = (city) => {
   const cityPrompts = {
-    'mumbai': '\n\nMumbai-specific disposal rules:\n- Wet waste: Collected daily, use green bins\n- Dry waste: Collected twice weekly, use blue bins\n- Hazardous waste: Drop at designated collection points\n- E-waste: Special collection centers available',
-    'delhi': '\n\nDelhi-specific disposal rules:\n- Wet waste: Composting encouraged, daily collection\n- Dry waste: Segregation mandatory, weekly collection\n- Hazardous waste: Special handling required\n- E-waste: Authorized recyclers only',
-    'bangalore': '\n\nBangalore-specific disposal rules:\n- Wet waste: Daily collection, composting preferred\n- Dry waste: Segregation at source mandatory\n- Hazardous waste: Special collection days\n- E-waste: BBMP collection centers',
-    'chennai': '\n\nChennai-specific disposal rules:\n- Wet waste: Daily collection, use designated bins\n- Dry waste: Segregation required, bi-weekly collection\n- Hazardous waste: Special handling protocols\n- E-waste: Corporation collection points',
-    'kolkata': '\n\nKolkata-specific disposal rules:\n- Wet waste: Daily collection, composting encouraged\n- Dry waste: Segregation mandatory, weekly collection\n- Hazardous waste: Special collection centers\n- E-waste: Authorized dealers only',
-    'hyderabad': '\n\nHyderabad-specific disposal rules:\n- Wet waste: Daily collection, use green bins\n- Dry waste: Segregation at source, bi-weekly collection\n- Hazardous waste: Special handling required\n- E-waste: GHMC collection centers',
-    'pune': '\n\nPune-specific disposal rules:\n- Wet waste: Daily collection, composting preferred\n- Dry waste: Segregation mandatory, weekly collection\n- Hazardous waste: Special collection days\n- E-waste: PMC collection points',
-    'ahmedabad': '\n\nAhmedabad-specific disposal rules:\n- Wet waste: Daily collection, use designated bins\n- Dry waste: Segregation required, bi-weekly collection\n- Hazardous waste: Special handling protocols\n- E-waste: AMC collection centers'
+    'mumbai': '\n\nMumbai: Wet waste (green bins, daily), Dry waste (blue bins, twice weekly)',
+    'delhi': '\n\nDelhi: Wet waste (daily collection), Dry waste (weekly collection)',
+    'bangalore': '\n\nBangalore: Wet waste (daily), Dry waste (segregation mandatory)',
+    'chennai': '\n\nChennai: Wet waste (daily), Dry waste (bi-weekly)',
+    'kolkata': '\n\nKolkata: Wet waste (daily), Dry waste (weekly)',
+    'hyderabad': '\n\nHyderabad: Wet waste (green bins, daily), Dry waste (bi-weekly)',
+    'pune': '\n\nPune: Wet waste (daily), Dry waste (weekly)',
+    'ahmedabad': '\n\nAhmedabad: Wet waste (daily), Dry waste (bi-weekly)'
   };
   
-  return cityPrompts[city?.toLowerCase()] || '\n\nGeneral disposal guidelines:\n- Wet waste: Compost or daily collection\n- Dry waste: Recycle when possible\n- Hazardous waste: Special handling required\n- E-waste: Authorized recyclers only';
+  return cityPrompts[city?.toLowerCase()] || '\n\nGeneral disposal guidelines';
 };
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  console.log('🏥 Health check requested');
-  res.json({ 
+  console.log('✅ Health check requested');
+  res.status(200).json({ 
     status: 'OK', 
     message: 'CleanSort OCR Server is running',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    pid: process.pid
+    geminiConfigured: !!genAI
   });
 });
 
-// Keep-alive endpoint for Railway
-app.get('/ping', (req, res) => {
-  console.log('🏓 Ping requested');
-  res.json({ 
-    status: 'pong', 
-    timestamp: new Date().toISOString()
-  });
-});
-
-// API Routes
-app.use('/api/items', itemsRouter);
-app.use('/api/reminders', remindersRouter);
-app.use('/api/settings', settingsRouter);
-
-// Main OCR processing endpoint
-app.post('/api/process-receipt', verifyToken, upload.single('image'), async (req, res) => {
+// Main OCR processing endpoint - NO AUTH for simplicity
+app.post('/api/process-receipt', upload.single('image'), async (req, res) => {
+  const startTime = Date.now();
+  console.log('\n========================================');
+  console.log('📸 OCR REQUEST RECEIVED');
+  console.log('========================================');
+  
   try {
-    console.log('=== OCR SERVER: Processing receipt ===');
-    
-    // Check if API key is configured
-    if (!process.env.GEMINI_API_KEY) {
-      console.error('GEMINI_API_KEY not found in environment variables');
-      return res.status(500).json({
-        success: false,
-        error: 'Server configuration error: GEMINI_API_KEY not found'
-      });
-    }
-
     // Validate request
     if (!req.file) {
+      console.log('❌ ERROR: No image file provided');
       return res.status(400).json({
         success: false,
         error: 'No image file provided'
       });
     }
 
-    const userId = req.user.uid;
     const { city } = req.body;
-    console.log('User ID:', userId);
-    console.log('Received city:', city);
-    console.log('Image file:', req.file.originalname, req.file.size, 'bytes');
+    console.log('📋 Request Details:');
+    console.log('  - File:', req.file.originalname);
+    console.log('  - Size:', (req.file.size / 1024).toFixed(2), 'KB');
+    console.log('  - Type:', req.file.mimetype);
+    console.log('  - City:', city || 'not specified');
 
-    // Skip image storage - just process for OCR
-    console.log('Processing image for OCR (not storing)');
+    // Check if Gemini is initialized
+    if (!genAI || !process.env.GEMINI_API_KEY) {
+      console.log('⚠️  Gemini not configured, returning mock data');
+      const mockData = getMockResults();
+      console.log('✅ Returning', mockData.length, 'mock items');
+      return res.json({
+        success: true,
+        items: mockData,
+        fallback: true
+      });
+    }
 
-    // Get city-specific prompt
-    const cityPromptSuffix = getCityPromptSuffix(city);
-    console.log('City prompt suffix:', cityPromptSuffix);
+    console.log('\n🤖 Processing with Gemini API...');
+    console.log('  - Model: gemini-1.5-flash');
+    console.log('  - City context:', city || 'general');
 
     // Prepare the prompt for Gemini
+    const cityPromptSuffix = getCityPromptSuffix(city);
     const basePrompt = `Extract items from this receipt. Return JSON array with: name, quantity, category (dry/wet/recyclable/hazardous/medical/e-waste), disposalInterval (1-30 days), confidence (0.0-1.0).
 
 Example: [{"name":"Milk","quantity":"1L","category":"recyclable","disposalInterval":3,"confidence":0.95}]`;
-
     const prompt = basePrompt + cityPromptSuffix;
 
     // Convert image to base64
     const base64Image = req.file.buffer.toString('base64');
     const mimeType = req.file.mimetype;
-
-    console.log('Processing with Gemini API...');
+    console.log('  - Image converted to base64');
 
     // Get the generative model
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     // Prepare the request
     const imagePart = {
@@ -168,59 +148,58 @@ Example: [{"name":"Milk","quantity":"1L","category":"recyclable","disposalInterv
       }
     };
 
+    console.log('  - Sending request to Gemini...');
+    const apiStartTime = Date.now();
+    
     const result = await model.generateContent([prompt, imagePart]);
     const response = await result.response;
     const responseText = response.text();
-
-    console.log('Gemini response received:', responseText);
-
-    // Clean the response text (remove markdown code blocks if present)
-    let cleanText = responseText.trim();
     
+    const apiDuration = Date.now() - apiStartTime;
+    console.log('✅ Gemini response received in', apiDuration, 'ms');
+    console.log('  - Response length:', responseText.length, 'chars');
+
+    console.log('\n📝 Parsing response...');
+    
+    // Clean the response text
+    let cleanText = responseText.trim();
     if (cleanText.startsWith('```json')) {
       cleanText = cleanText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+      console.log('  - Removed ```json``` wrapper');
     } else if (cleanText.startsWith('```')) {
       cleanText = cleanText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+      console.log('  - Removed ``` wrapper');
     }
-
-    console.log('Cleaned response text:', cleanText);
 
     // Parse the JSON response
-    let items;
-    try {
-      items = JSON.parse(cleanText);
-      console.log('Parsed JSON items:', items);
-      console.log('Number of items parsed:', items.length);
-    } catch (parseError) {
-      console.error('JSON parse error:', parseError);
-      console.error('Failed to parse text:', cleanText);
-      throw new Error(`Failed to parse JSON response: ${parseError.message}`);
-    }
-
-    // Validate items structure
+    console.log('  - Parsing JSON...');
+    const items = JSON.parse(cleanText);
+    console.log('  - Successfully parsed JSON');
+    
     if (!Array.isArray(items)) {
-      console.error('Response is not an array:', items);
+      console.log('❌ ERROR: Response is not an array, got:', typeof items);
       throw new Error('Response is not an array');
     }
+    console.log('  - Validated as array with', items.length, 'items');
 
-    // Transform to match frontend ParsedItem interface
+    // Transform to match frontend interface
     const parsedItems = items.map((item, index) => {
-      console.log(`Processing item ${index}:`, item);
-      
+      console.log(`  - Item ${index + 1}: ${item.name} (${item.category})`);
       return {
         id: `${Date.now()}-${index}`,
         name: item.name,
         quantity: item.quantity,
         category: item.category,
         interval: item.disposalInterval,
-        confidence: item.confidence,
+        confidence: item.confidence
       };
     });
 
-    console.log('Final parsed items array:', parsedItems);
-    console.log('Total items to return:', parsedItems.length);
+    const totalDuration = Date.now() - startTime;
+    console.log('\n✅ SUCCESS - Returning', parsedItems.length, 'items');
+    console.log('⏱️  Total processing time:', totalDuration, 'ms');
+    console.log('========================================\n');
 
-    // Return the parsed items (frontend will save them via API)
     res.json({
       success: true,
       items: parsedItems,
@@ -230,146 +209,109 @@ Example: [{"name":"Milk","quantity":"1L","category":"recyclable","disposalInterv
     });
 
   } catch (error) {
-    console.error('OCR processing error:', error);
+    const totalDuration = Date.now() - startTime;
+    console.log('\n❌ ERROR OCCURRED');
+    console.log('  - Error type:', error.name);
+    console.log('  - Error message:', error.message);
+    console.log('  - Duration before error:', totalDuration, 'ms');
+    if (error.stack) {
+      console.log('  - Stack trace:', error.stack.split('\n').slice(0, 3).join('\n'));
+    }
+    console.log('  - Falling back to mock data');
+    console.log('========================================\n');
     
     // Return fallback mock data on error
-    console.log('Falling back to mock data...');
-    const mockResults = [
-      {
-        id: `${Date.now()}-1`,
-        name: "Organic Milk 1L",
-        quantity: "1 bottle",
-        category: "recyclable",
-        interval: 3,
-        confidence: 0.95,
-      },
-      {
-        id: `${Date.now()}-2`,
-        name: "Bananas",
-        quantity: "1.2 kg",
-        category: "wet",
-        interval: 1,
-        confidence: 0.88,
-      },
-      {
-        id: `${Date.now()}-3`,
-        name: "Bread Loaf",
-        quantity: "1 pack",
-        category: "dry",
-        interval: 7,
-        confidence: 0.92,
-      },
-    ];
-
+    const mockData = getMockResults();
     res.json({
       success: true,
-      items: mockResults,
-      count: mockResults.length,
-      city: req.body.city,
-      timestamp: new Date().toISOString(),
+      items: mockData,
+      count: mockData.length,
       fallback: true,
       error: error.message
     });
   }
 });
 
+// Helper function for mock results
+function getMockResults() {
+  return [
+    {
+      id: `${Date.now()}-1`,
+      name: "Organic Milk 1L",
+      quantity: "1 bottle",
+      category: "recyclable",
+      interval: 3,
+      confidence: 0.95
+    },
+    {
+      id: `${Date.now()}-2`,
+      name: "Bananas",
+      quantity: "1.2 kg",
+      category: "wet",
+      interval: 1,
+      confidence: 0.88
+    },
+    {
+      id: `${Date.now()}-3`,
+      name: "Bread Loaf",
+      quantity: "1 pack",
+      category: "dry",
+      interval: 7,
+      confidence: 0.92
+    }
+  ];
+}
+
 // Error handling middleware
 app.use((error, req, res, next) => {
-  console.error('Server error:', error);
+  console.log('\n⚠️  MIDDLEWARE ERROR HANDLER');
+  console.log('  - Error:', error.message);
+  console.log('  - Path:', req.path);
+  console.log('  - Method:', req.method);
   
   if (error instanceof multer.MulterError) {
+    console.log('  - Type: Multer Error');
     if (error.code === 'LIMIT_FILE_SIZE') {
+      console.log('  - Reason: File too large');
       return res.status(400).json({
+        success: false,
         error: 'File too large. Maximum size is 50MB.'
       });
     }
   }
   
+  console.log('  - Type: General server error');
   res.status(500).json({
-    error: 'Internal server error',
-    message: error.message
+    success: false,
+    error: 'Internal server error'
   });
 });
 
 // 404 handler
 app.use('*', (req, res) => {
+  console.log('⚠️  404 - Endpoint not found:', req.method, req.originalUrl);
   res.status(404).json({
+    success: false,
     error: 'Endpoint not found',
     path: req.originalUrl
   });
 });
 
-// Add process event listeners for debugging
-process.on('uncaughtException', (error) => {
-  console.error('🚨 UNCAUGHT EXCEPTION:', error);
-  console.error('Stack:', error.stack);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('🚨 UNHANDLED REJECTION at:', promise, 'reason:', reason);
-  process.exit(1);
-});
-
-process.on('SIGTERM', () => {
-  console.log('📴 SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('📴 SIGINT received, shutting down gracefully');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
 // Start server
-const server = app.listen(PORT, () => {
-  const actualPort = server.address().port;
-  console.log(`🚀 CleanSort OCR Server running on port ${actualPort}`);
-  console.log(`📡 Health check: http://localhost:${actualPort}/health`);
-  console.log(`🔍 OCR endpoint: http://localhost:${actualPort}/api/process-receipt`);
-  console.log(`📦 Items API: http://localhost:${actualPort}/api/items`);
-  console.log(`⏰ Reminders API: http://localhost:${actualPort}/api/reminders`);
-  console.log(`⚙️  Settings API: http://localhost:${actualPort}/api/settings`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔧 Process ID: ${process.pid}`);
-  console.log(`📊 Memory usage: ${JSON.stringify(process.memoryUsage())}`);
-  
-  if (!process.env.GEMINI_API_KEY) {
-    console.warn('⚠️  WARNING: GEMINI_API_KEY not found in environment variables');
-    console.warn('   Please create a .env file with your Gemini API key');
-  }
-  
-  if (!process.env.FIREBASE_SERVICE_ACCOUNT_KEY && !process.env.FIREBASE_STORAGE_BUCKET) {
-    console.warn('⚠️  WARNING: Firebase configuration not found');
-    console.warn('   Please set FIREBASE_SERVICE_ACCOUNT_KEY and FIREBASE_STORAGE_BUCKET environment variables');
-  }
-  
-  console.log('✅ Server startup completed successfully');
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('\n========================================');
+  console.log('🚀 CleanSort OCR Server Started');
+  console.log('========================================');
+  console.log('Server Info:');
+  console.log('  - Port:', PORT);
+  console.log('  - Host: 0.0.0.0 (all interfaces)');
+  console.log('  - Environment:', process.env.NODE_ENV || 'development');
+  console.log('  - Gemini AI:', genAI ? '✅ Configured' : '⚠️  Not configured (using mock data)');
+  console.log('\nAvailable Endpoints:');
+  console.log('  - GET  /health');
+  console.log('  - POST /api/process-receipt');
+  console.log('\n✅ Server is ready to accept requests');
+  console.log('========================================\n');
 });
-
-server.on('error', (error) => {
-  console.error('🚨 SERVER ERROR:', error);
-  if (error.code === 'EADDRINUSE') {
-    console.error('Port is already in use');
-  }
-});
-
-console.log('🔄 Starting server initialization...');
-
-// Railway-specific: Keep the process alive
-if (process.env.RAILWAY_ENVIRONMENT) {
-  console.log('🚂 Running in Railway environment');
-  
-  // Set up a periodic keep-alive
-  setInterval(() => {
-    console.log('💓 Keep-alive ping - Server still running');
-  }, 30000); // Every 30 seconds
-}
 
 export default app;
