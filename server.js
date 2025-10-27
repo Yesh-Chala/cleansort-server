@@ -84,9 +84,22 @@ const getCityPromptSuffix = (city) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  console.log('🏥 Health check requested');
   res.json({ 
     status: 'OK', 
     message: 'CleanSort OCR Server is running',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    pid: process.pid
+  });
+});
+
+// Keep-alive endpoint for Railway
+app.get('/ping', (req, res) => {
+  console.log('🏓 Ping requested');
+  res.json({ 
+    status: 'pong', 
     timestamp: new Date().toISOString()
   });
 });
@@ -286,6 +299,34 @@ app.use('*', (req, res) => {
   });
 });
 
+// Add process event listeners for debugging
+process.on('uncaughtException', (error) => {
+  console.error('🚨 UNCAUGHT EXCEPTION:', error);
+  console.error('Stack:', error.stack);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🚨 UNHANDLED REJECTION at:', promise, 'reason:', reason);
+  process.exit(1);
+});
+
+process.on('SIGTERM', () => {
+  console.log('📴 SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('📴 SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
 // Start server
 const server = app.listen(PORT, () => {
   const actualPort = server.address().port;
@@ -296,6 +337,8 @@ const server = app.listen(PORT, () => {
   console.log(`⏰ Reminders API: http://localhost:${actualPort}/api/reminders`);
   console.log(`⚙️  Settings API: http://localhost:${actualPort}/api/settings`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔧 Process ID: ${process.pid}`);
+  console.log(`📊 Memory usage: ${JSON.stringify(process.memoryUsage())}`);
   
   if (!process.env.GEMINI_API_KEY) {
     console.warn('⚠️  WARNING: GEMINI_API_KEY not found in environment variables');
@@ -306,6 +349,27 @@ const server = app.listen(PORT, () => {
     console.warn('⚠️  WARNING: Firebase configuration not found');
     console.warn('   Please set FIREBASE_SERVICE_ACCOUNT_KEY and FIREBASE_STORAGE_BUCKET environment variables');
   }
+  
+  console.log('✅ Server startup completed successfully');
 });
+
+server.on('error', (error) => {
+  console.error('🚨 SERVER ERROR:', error);
+  if (error.code === 'EADDRINUSE') {
+    console.error('Port is already in use');
+  }
+});
+
+console.log('🔄 Starting server initialization...');
+
+// Railway-specific: Keep the process alive
+if (process.env.RAILWAY_ENVIRONMENT) {
+  console.log('🚂 Running in Railway environment');
+  
+  // Set up a periodic keep-alive
+  setInterval(() => {
+    console.log('💓 Keep-alive ping - Server still running');
+  }, 30000); // Every 30 seconds
+}
 
 export default app;
