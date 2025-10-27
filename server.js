@@ -3,7 +3,7 @@ import cors from 'cors';
 import multer from 'multer';
 import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { initializeApp, getApps } from 'firebase-admin/app';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 
 // Load environment variables
@@ -46,8 +46,16 @@ let db;
 console.log('=== Initializing Firebase Admin ===');
 try {
   if (!getApps().length) {
+    // Use service account key if available, otherwise use project ID
+    const firebaseConfig = process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
+      ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
+      : { projectId: process.env.FIREBASE_PROJECT_ID || 'clean-sort' };
+    
     initializeApp({
-      projectId: process.env.FIREBASE_PROJECT_ID || 'clean-sort',
+      credential: process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
+        ? cert(firebaseConfig)
+        : undefined,
+      projectId: firebaseConfig.project_id || firebaseConfig.projectId || 'clean-sort',
     });
   }
   db = getFirestore();
