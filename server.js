@@ -347,7 +347,7 @@ Example: [{"name":"Milk","quantity":"1L","category":"recyclable","disposalInterv
     console.log('  - Image converted to base64');
 
     // Get the generative model
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     // Prepare the request
     const imagePart = {
