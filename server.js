@@ -95,7 +95,7 @@ let mockSettings = { city: '', onboarding: false };
 // Items API endpoints
 app.get('/api/items', (req, res) => {
   console.log('GET /api/items - Returning', mockItems.length, 'items');
-  res.json(mockItems);
+  res.json({ success: true, data: mockItems });
 });
 
 app.post('/api/items', (req, res) => {
@@ -106,7 +106,7 @@ app.post('/api/items', (req, res) => {
   };
   mockItems.push(item);
   console.log('POST /api/items - Added item:', item.id);
-  res.json({ item });
+  res.json({ success: true, data: { item } });
 });
 
 app.delete('/api/items/:id', (req, res) => {
@@ -124,30 +124,30 @@ app.delete('/api/items/:id', (req, res) => {
 // Reminders API endpoints
 app.get('/api/reminders', (req, res) => {
   console.log('GET /api/reminders - Returning', mockReminders.length, 'reminders');
-  res.json(mockReminders);
+  res.json({ success: true, data: mockReminders });
 });
 
 // Settings API endpoints
 app.get('/api/settings/city', (req, res) => {
   console.log('GET /api/settings/city - Returning city:', mockSettings.city);
-  res.json(mockSettings.city);
+  res.json({ success: true, data: mockSettings.city });
 });
 
 app.put('/api/settings/city', (req, res) => {
   mockSettings.city = req.body.city || '';
   console.log('PUT /api/settings/city - Set city to:', mockSettings.city);
-  res.json({ success: true });
+  res.json({ success: true, data: { city: mockSettings.city } });
 });
 
 app.get('/api/settings/onboarding', (req, res) => {
   console.log('GET /api/settings/onboarding - Returning:', mockSettings.onboarding);
-  res.json(mockSettings.onboarding);
+  res.json({ success: true, data: mockSettings.onboarding });
 });
 
 app.put('/api/settings/onboarding', (req, res) => {
   mockSettings.onboarding = req.body.completed || false;
   console.log('PUT /api/settings/onboarding - Set to:', mockSettings.onboarding);
-  res.json({ success: true });
+  res.json({ success: true, data: { onboarding: mockSettings.onboarding } });
 });
 
 // Main OCR processing endpoint - NO AUTH for simplicity
