@@ -8,7 +8,8 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+// Railway sets PORT dynamically, but sometimes it's 0 - use fallback
+const PORT = process.env.PORT && process.env.PORT !== '0' ? process.env.PORT : 3001;
 
 // Logging middleware - log all requests
 app.use((req, res, next) => {
@@ -42,7 +43,8 @@ const upload = multer({
 let genAI;
 console.log('=== Initializing Gemini AI ===');
 console.log('Environment check:');
-console.log('- PORT:', process.env.PORT || '3001 (default)');
+console.log('- PORT from env:', process.env.PORT);
+console.log('- PORT using:', PORT);
 console.log('- NODE_ENV:', process.env.NODE_ENV || 'development');
 console.log('- GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? '✅ Set (hidden)' : '❌ Not set');
 
