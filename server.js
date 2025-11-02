@@ -5,6 +5,8 @@ import dotenv from 'dotenv';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getMessaging } from 'firebase-admin/messaging';
+import { getAuth } from 'firebase-admin/auth';
 
 // Load environment variables
 dotenv.config();
@@ -43,6 +45,8 @@ const upload = multer({
 
 // Initialize Firebase Admin
 let db;
+let auth;
+let messaging;
 console.log('=== Initializing Firebase Admin ===');
 try {
   if (!getApps().length) {
@@ -59,7 +63,11 @@ try {
     });
   }
   db = getFirestore();
+  auth = getAuth();
+  messaging = getMessaging();
   console.log('✅ Firebase Admin initialized successfully');
+  console.log('✅ Firebase Auth initialized');
+  console.log('✅ Firebase Messaging (FCM) initialized');
 } catch (error) {
   console.error('❌ Failed to initialize Firebase Admin:', error.message);
   console.log('⚠️  Will use mock data storage');
@@ -103,6 +111,18 @@ const getCityPromptSuffix = (city) => {
 };
 
 // Health check endpoint
+// Manual trigger endpoint for testing notifications
+app.post('/api/notifications/trigger', async (req, res) => {
+  try {
+    console.log('🔔 Manual notification trigger requested');
+    await checkAndSendNotifications();
+    res.json({ success: true, message: 'Notification check completed' });
+  } catch (error) {
+    console.error('Error triggering notifications:', error);
+    res.status(500).json({ error: 'Failed to trigger notifications' });
+  }
+});
+
 app.get('/health', (req, res) => {
   console.log('✅ Health check requested');
   res.status(200).json({ 
@@ -119,18 +139,22 @@ let mockReminders = [];
 let mockSettings = { city: '', onboarding: false };
 
 // Items API endpoints
-app.get('/api/items', async (req, res) => {
+app.get('/api/items', verifyToken, async (req, res) => {
   try {
+    const userId = req.userId;
     if (db) {
-      // Use Firebase Firestore
-      const itemsSnapshot = await db.collection('items').get();
+      // Use Firebase Firestore - filter by userId
+      const itemsSnapshot = await db.collection('items')
+        .where('userId', '==', userId)
+        .get();
       const items = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      console.log('GET /api/items - Returning', items.length, 'items from Firestore');
+      console.log('GET /api/items - Returning', items.length, 'items from Firestore for user:', userId);
       res.json({ success: true, data: items });
     } else {
       // Fallback to mock data
-      console.log('GET /api/items - Returning', mockItems.length, 'items from mock data');
-      res.json({ success: true, data: mockItems });
+      const userItems = mockItems.filter(item => item.userId === userId);
+      console.log('GET /api/items - Returning', userItems.length, 'items from mock data for user:', userId);
+      res.json({ success: true, data: userItems });
     }
   } catch (error) {
     console.error('Error getting items:', error);
@@ -138,10 +162,12 @@ app.get('/api/items', async (req, res) => {
   }
 });
 
-app.post('/api/items', async (req, res) => {
+app.post('/api/items', verifyToken, async (req, res) => {
   try {
+    const userId = req.userId;
     const itemData = {
       ...req.body,
+      userId: userId, // Add userId to item
       createdAt: new Date().toISOString()
     };
     
@@ -158,6 +184,7 @@ app.post('/api/items', async (req, res) => {
         itemId: docRef.id,
         itemName: itemData.name,
         category: itemData.category,
+        userId: userId, // Add userId to reminder
         dueDate: disposalDate.toISOString(),
         status: "upcoming",
         createdAt: new Date().toISOString()
@@ -244,23 +271,100 @@ app.delete('/api/items/:id', async (req, res) => {
   }
 });
 
-// Reminders API endpoints
-app.get('/api/reminders', async (req, res) => {
+// Authentication middleware - verify Firebase ID token
+async function verifyToken(req, res, next) {
   try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'No authorization token provided' });
+    }
+
+    const token = authHeader.split('Bearer ')[1];
+    if (!auth || !token) {
+      return res.status(401).json({ error: 'Authentication service not available' });
+    }
+
+    const decodedToken = await auth.verifyIdToken(token);
+    req.user = decodedToken;
+    req.userId = decodedToken.uid;
+    next();
+  } catch (error) {
+    console.error('Token verification error:', error.message);
+    res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// Reminders API endpoints
+app.get('/api/reminders', verifyToken, async (req, res) => {
+  try {
+    const userId = req.userId;
     if (db) {
-      // Use Firebase Firestore
-      const remindersSnapshot = await db.collection('reminders').get();
+      // Use Firebase Firestore - filter by userId
+      const remindersSnapshot = await db.collection('reminders')
+        .where('userId', '==', userId)
+        .get();
       const reminders = remindersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      console.log('GET /api/reminders - Returning', reminders.length, 'reminders from Firestore');
+      console.log('GET /api/reminders - Returning', reminders.length, 'reminders from Firestore for user:', userId);
       res.json({ success: true, data: reminders });
     } else {
       // Fallback to mock data
-      console.log('GET /api/reminders - Returning', mockReminders.length, 'reminders from mock data');
-      res.json({ success: true, data: mockReminders });
+      const userReminders = mockReminders.filter(reminder => reminder.userId === userId);
+      console.log('GET /api/reminders - Returning', userReminders.length, 'reminders from mock data for user:', userId);
+      res.json({ success: true, data: userReminders });
     }
   } catch (error) {
     console.error('Error getting reminders:', error);
     res.status(500).json({ error: 'Failed to get reminders' });
+  }
+});
+
+// FCM Token Registration endpoint
+app.post('/api/fcm/register', verifyToken, async (req, res) => {
+  try {
+    const { token } = req.body;
+    const userId = req.userId;
+
+    if (!token) {
+      return res.status(400).json({ error: 'FCM token is required' });
+    }
+
+    if (!db) {
+      console.log('POST /api/fcm/register - Firebase not available, skipping token registration');
+      return res.json({ success: true, message: 'Token registration skipped (mock mode)' });
+    }
+
+    // Store token in Firestore: fcm_tokens/{userId}/tokens/{tokenId}
+    // Use the token itself as the document ID (or hash it) to prevent duplicates
+    const tokenDoc = {
+      token,
+      userId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      deviceInfo: req.headers['user-agent'] || 'unknown',
+    };
+
+    // Check if token already exists for this user
+    const tokensRef = db.collection('fcm_tokens').doc(userId).collection('tokens');
+    const existingTokens = await tokensRef.where('token', '==', token).get();
+
+    if (!existingTokens.empty) {
+      // Update existing token
+      const existingDoc = existingTokens.docs[0];
+      await existingDoc.ref.update({
+        updatedAt: new Date().toISOString(),
+        deviceInfo: tokenDoc.deviceInfo,
+      });
+      console.log('PUT /api/fcm/register - Updated existing token for user:', userId);
+      return res.json({ success: true, message: 'Token updated' });
+    } else {
+      // Add new token
+      await tokensRef.add(tokenDoc);
+      console.log('POST /api/fcm/register - Registered new token for user:', userId);
+      return res.json({ success: true, message: 'Token registered' });
+    }
+  } catch (error) {
+    console.error('Error registering FCM token:', error);
+    res.status(500).json({ error: 'Failed to register FCM token' });
   }
 });
 
@@ -492,6 +596,292 @@ Example: [{"name":"Milk","quantity":"1L","category":"recyclable","disposalInterv
   }
 });
 
+// Notification Scheduler - Check and send reminder notifications
+async function checkAndSendNotifications() {
+  if (!db || !messaging) {
+    console.log('⏭️  Skipping notification check - Firebase not available');
+    return;
+  }
+
+  try {
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour buffer
+    
+    console.log('\n🔔 Checking for due reminders...');
+    console.log('  - Current time:', now.toISOString());
+    console.log('  - Checking reminders due before:', oneHourFromNow.toISOString());
+
+    // Find reminders that are due (or due within 1 hour)
+    // Query by date only (no composite index needed), then filter by status in code
+    const allRemindersSnapshot = await db.collection('reminders')
+      .where('dueDate', '<=', oneHourFromNow.toISOString())
+      .get();
+    
+    // Filter by status in JavaScript (upcoming or overdue, not completed)
+    // Also check if notification was already sent recently (within last 5 minutes)
+    const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
+    const remindersSnapshot = {
+      docs: allRemindersSnapshot.docs.filter(doc => {
+        const reminder = doc.data();
+        // Skip if status is not upcoming/overdue
+        if (reminder.status !== 'upcoming' && reminder.status !== 'overdue') {
+          return false;
+        }
+        // Skip if notification was sent recently (within last 5 minutes) to prevent spam
+        if (reminder.lastNotificationSent && reminder.lastNotificationSent > fiveMinutesAgo) {
+          return false;
+        }
+        return true;
+      }),
+      size: 0, // Will calculate below
+      empty: true // Will calculate below
+    };
+    
+    remindersSnapshot.size = remindersSnapshot.docs.length;
+    remindersSnapshot.empty = remindersSnapshot.size === 0;
+
+    console.log('  - Found', remindersSnapshot.size, 'reminders due');
+
+    if (remindersSnapshot.empty) {
+      console.log('✅ No reminders due at this time');
+      return;
+    }
+
+    let sentCount = 0;
+    let failedCount = 0;
+
+    // Group reminders by user
+    const remindersByUser = {};
+    for (const doc of remindersSnapshot.docs) {
+      const reminder = { id: doc.id, ...doc.data() };
+      
+      // Get the item to find the user ID
+      // Items might be stored per-user, so check if reminder has userId or get from item
+      let userId = reminder.userId;
+      
+      if (!userId) {
+        console.log('  ⚠️  Reminder missing userId, looking up from item:', reminder.id);
+        if (!reminder.itemId) {
+          console.log('  ❌ Reminder has no itemId, cannot determine user:', reminder.id);
+          console.log('  🗑️  Deleting orphaned reminder (no itemId)');
+          await db.collection('reminders').doc(reminder.id).delete().catch(console.error);
+          continue;
+        }
+        
+        const itemDoc = await db.collection('items').doc(reminder.itemId).get();
+        if (!itemDoc.exists) {
+          console.log('  ⚠️  Item not found for reminder:', reminder.id, 'itemId:', reminder.itemId);
+          console.log('  🗑️  Deleting orphaned reminder (item not found)');
+          await db.collection('reminders').doc(reminder.id).delete().catch(console.error);
+          continue;
+        }
+        const item = itemDoc.data();
+        userId = item.userId;
+        
+        // If item also doesn't have userId, it's orphaned - try to find from current user's active reminders
+        if (!userId) {
+          console.log('  ⚠️  Item also missing userId:', reminder.itemId);
+          console.log('  🔍 Attempting to find userId from other reminders for same item...');
+          
+          // Look for other reminders for the same item that might have userId
+          // Note: Firestore doesn't support != null, so we get all and filter
+          const otherRemindersSnapshot = await db.collection('reminders')
+            .where('itemId', '==', reminder.itemId)
+            .limit(10) // Get a few to check
+            .get();
+          
+          // Filter for reminders that have userId
+          const otherReminders = {
+            docs: otherRemindersSnapshot.docs.filter(doc => {
+              const data = doc.data();
+              return data.userId && data.userId.trim() !== '';
+            }),
+            empty: false,
+          };
+          
+          if (otherReminders.docs.length === 0) {
+            otherReminders.empty = true;
+          }
+          
+          if (otherReminders.docs.length > 0) {
+            userId = otherReminders.docs[0].data().userId;
+            console.log('  ✅ Found userId from other reminder for same item:', userId);
+            
+            // Update both the item and this reminder with the found userId
+            await Promise.all([
+              db.collection('items').doc(reminder.itemId).update({ userId }),
+              db.collection('reminders').doc(reminder.id).update({ userId }),
+            ]);
+            console.log('  ✅ Updated item and reminder with userId');
+          } else {
+            console.log('  ❌ No userId found anywhere for reminder:', reminder.id);
+            console.log('  🗑️  Deleting orphaned reminder (cannot determine user)');
+            await db.collection('reminders').doc(reminder.id).delete().catch(console.error);
+            continue;
+          }
+        } else {
+          // If we found userId from item, update the reminder to include it (backfill)
+          console.log('  ✅ Found userId from item, updating reminder:', reminder.id);
+          await db.collection('reminders').doc(reminder.id).update({
+            userId: userId,
+          });
+        }
+      }
+      
+      if (!userId) {
+        console.log('  ❌ No userId found for reminder (even after all lookups):', reminder.id);
+        console.log('  🗑️  This should not happen - deleting orphaned reminder');
+        await db.collection('reminders').doc(reminder.id).delete().catch(console.error);
+        continue;
+      }
+
+      if (!remindersByUser[userId]) {
+        remindersByUser[userId] = [];
+      }
+      remindersByUser[userId].push(reminder);
+    }
+
+    // Send notifications to each user
+    for (const [userId, userReminders] of Object.entries(remindersByUser)) {
+      try {
+        // Get user's FCM tokens
+        const tokensRef = db.collection('fcm_tokens').doc(userId).collection('tokens');
+        const tokensSnapshot = await tokensRef.get();
+
+        if (tokensSnapshot.empty) {
+          console.log('  ⚠️  No FCM tokens found for user:', userId);
+          continue;
+        }
+
+        const tokens = tokensSnapshot.docs.map(doc => doc.data().token);
+        console.log('  - User:', userId, '- Tokens:', tokens.length);
+
+        // Send notification for each reminder
+        for (const reminder of userReminders) {
+          const notification = {
+            notification: {
+              title: 'CleanSort Reminder',
+              body: `Time to dispose: ${reminder.itemName}`,
+            },
+            data: {
+              reminderId: reminder.id,
+              itemId: reminder.itemId,
+              itemName: reminder.itemName,
+              category: reminder.category || '',
+              dueDate: reminder.dueDate,
+            },
+            tokens: tokens, // Send to all user's devices
+          };
+
+          try {
+            const response = await messaging.sendEachForMulticast({
+              tokens: tokens,
+              notification: notification.notification,
+              data: notification.data,
+              apns: {
+                payload: {
+                  aps: {
+                    sound: 'default',
+                    badge: userReminders.length,
+                  },
+                },
+              },
+              android: {
+                priority: 'high',
+                notification: {
+                  sound: 'default',
+                  channelId: 'reminders',
+                },
+              },
+            });
+
+            console.log('  ✅ Notification sent to', response.successCount, 'device(s)');
+            console.log('  📝 Response details:', {
+              successCount: response.successCount,
+              failureCount: response.failureCount,
+              totalTokens: tokens.length,
+            });
+            
+            // Log detailed response for debugging
+            if (response.failureCount > 0) {
+              response.responses.forEach((resp, idx) => {
+                if (!resp.success && resp.error) {
+                  console.log('  ❌ Token', idx, 'failed:', resp.error.code, '-', resp.error.message);
+                } else {
+                  console.log('  ✅ Token', idx, 'succeeded');
+                }
+              });
+            }
+            
+            // Mark reminder as notified (optional - add a field to track this)
+            await db.collection('reminders').doc(reminder.id).update({
+              lastNotificationSent: new Date().toISOString(),
+            });
+
+            sentCount += response.successCount;
+            
+            // Handle failed tokens
+            if (response.failureCount > 0) {
+              console.log('  ⚠️  Failed to send to', response.responses.length - response.successCount, 'device(s)');
+              failedCount += response.failureCount;
+              
+              // Remove invalid tokens
+              response.responses.forEach((resp, idx) => {
+                if (!resp.success && resp.error) {
+                  const errorCode = resp.error.code;
+                  console.log('  🗑️  Removing invalid token:', errorCode);
+                  if (errorCode === 'messaging/invalid-registration-token' || 
+                      errorCode === 'messaging/registration-token-not-registered') {
+                    // Remove invalid token from Firestore
+                    tokensSnapshot.docs[idx]?.ref.delete().catch(console.error);
+                    console.log('  🗑️  Removed invalid token from database');
+                  }
+                }
+              });
+            }
+          } catch (sendError) {
+            console.error('  ❌ Error sending notification:', sendError.message);
+            failedCount++;
+          }
+        }
+      } catch (userError) {
+        console.error('  ❌ Error processing user reminders:', userError.message);
+      }
+    }
+
+    console.log('\n📊 Notification Summary:');
+    console.log('  - Sent:', sentCount);
+    console.log('  - Failed:', failedCount);
+    console.log('✅ Notification check completed\n');
+
+  } catch (error) {
+    console.error('❌ Error in notification scheduler:', error);
+    console.error('Stack:', error.stack);
+  }
+}
+
+// Run notification check every hour
+let notificationInterval;
+function startNotificationScheduler() {
+  if (!db || !messaging) {
+    console.log('⏭️  Notification scheduler not started - Firebase not available');
+    return;
+  }
+
+  // Run immediately on startup (after 10 seconds to let server initialize)
+  setTimeout(() => {
+    console.log('🚀 Starting notification scheduler...');
+    checkAndSendNotifications();
+  }, 10000);
+
+  // Then run every 5 minutes for active checking (especially during testing)
+  notificationInterval = setInterval(() => {
+    checkAndSendNotifications();
+  }, 5 * 60 * 1000); // 5 minutes
+
+  console.log('✅ Notification scheduler started (runs every 5 minutes)');
+}
+
 // Helper function for mock results
 function getMockResults() {
   return [
@@ -567,6 +957,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  - Host: 0.0.0.0 (all interfaces)');
   console.log('  - Environment:', process.env.NODE_ENV || 'development');
   console.log('  - Gemini AI:', genAI ? '✅ Configured' : '⚠️  Not configured (using mock data)');
+  console.log('  - Firebase:', db ? '✅ Configured' : '⚠️  Not configured (using mock data)');
+  console.log('  - FCM Messaging:', messaging ? '✅ Configured' : '⚠️  Not configured');
   console.log('\nAvailable Endpoints:');
   console.log('  - GET  /health');
   console.log('  - POST /api/process-receipt');
@@ -574,12 +966,16 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  - POST /api/items');
   console.log('  - DELETE /api/items/:id');
   console.log('  - GET  /api/reminders');
+  console.log('  - POST /api/fcm/register (protected)');
   console.log('  - GET  /api/settings/city');
   console.log('  - PUT  /api/settings/city');
   console.log('  - GET  /api/settings/onboarding');
   console.log('  - PUT  /api/settings/onboarding');
   console.log('\n✅ Server is ready to accept requests');
   console.log('========================================\n');
+
+  // Start notification scheduler
+  startNotificationScheduler();
 });
 
 export default app;
