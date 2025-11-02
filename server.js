@@ -53,13 +53,13 @@ try {
     // Use service account key if available, otherwise use project ID
     const firebaseConfig = process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
       ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
-      : { projectId: process.env.FIREBASE_PROJECT_ID || 'clean-sort' };
+      : { projectId: process.env.FIREBASE_PROJECT_ID || 'clean-sort-bits-2025' };
     
     initializeApp({
       credential: process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
         ? cert(firebaseConfig)
         : undefined,
-      projectId: firebaseConfig.project_id || firebaseConfig.projectId || 'clean-sort',
+      projectId: firebaseConfig.project_id || firebaseConfig.projectId || 'clean-sort-bits-2025',
     });
   }
   db = getFirestore();
@@ -224,6 +224,94 @@ app.post('/api/items', verifyToken, async (req, res) => {
   } catch (error) {
     console.error('Error saving item:', error);
     res.status(500).json({ error: 'Failed to save item' });
+  }
+});
+
+// Bulk items endpoint
+app.post('/api/items/bulk', verifyToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { items } = req.body;
+    
+    if (!items || !Array.isArray(items)) {
+      return res.status(400).json({ error: 'Items array is required' });
+    }
+    
+    const savedItems = [];
+    const savedReminders = [];
+    
+    if (db) {
+      // Use Firebase Firestore - batch write for better performance
+      const batch = db.batch();
+      
+      for (const itemData of items) {
+        const itemRef = db.collection('items').doc();
+        const itemWithUser = {
+          ...itemData,
+          userId: userId,
+          createdAt: new Date().toISOString()
+        };
+        batch.set(itemRef, itemWithUser);
+        
+        // Create automatic reminder for each item
+        const disposalDate = new Date();
+        disposalDate.setDate(disposalDate.getDate() + (itemData.interval || 7));
+        
+        const reminderRef = db.collection('reminders').doc();
+        const reminderData = {
+          itemId: itemRef.id,
+          itemName: itemData.name,
+          category: itemData.category,
+          userId: userId,
+          dueDate: disposalDate.toISOString(),
+          status: "upcoming",
+          createdAt: new Date().toISOString()
+        };
+        batch.set(reminderRef, reminderData);
+        
+        savedItems.push({ id: itemRef.id, ...itemWithUser });
+        savedReminders.push({ id: reminderRef.id, ...reminderData });
+      }
+      
+      await batch.commit();
+      console.log('POST /api/items/bulk - Added', items.length, 'items and reminders to Firestore');
+      res.json({ success: true, data: { items: savedItems, reminders: savedReminders } });
+    } else {
+      // Fallback to mock data
+      for (const itemData of items) {
+        const item = {
+          ...itemData,
+          id: Date.now().toString(36) + Math.random().toString(36).substr(2),
+          userId: userId,
+          createdAt: new Date().toISOString()
+        };
+        mockItems.push(item);
+        
+        const disposalDate = new Date();
+        disposalDate.setDate(disposalDate.getDate() + (itemData.interval || 7));
+        
+        const reminder = {
+          id: Date.now().toString(36) + Math.random().toString(36).substr(2),
+          itemId: item.id,
+          itemName: itemData.name,
+          category: itemData.category,
+          userId: userId,
+          dueDate: disposalDate.toISOString(),
+          status: "upcoming",
+          createdAt: new Date().toISOString()
+        };
+        mockReminders.push(reminder);
+        
+        savedItems.push(item);
+        savedReminders.push(reminder);
+      }
+      
+      console.log('POST /api/items/bulk - Added', items.length, 'items and reminders to mock data');
+      res.json({ success: true, data: { items: savedItems, reminders: savedReminders } });
+    }
+  } catch (error) {
+    console.error('Error saving bulk items:', error);
+    res.status(500).json({ error: 'Failed to save bulk items' });
   }
 });
 
